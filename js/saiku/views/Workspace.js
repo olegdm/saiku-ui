@@ -626,5 +626,50 @@ var Workspace = Backbone.View.extend({
     
     error: function(args) {
         this.processing.html(safe_tags_replace(args.data.error)).show();
+    },
+
+    load_dimension_levels: function(member) {
+        var levels = new Array();
+
+        var dimensions = Saiku.session.sessionworkspace.dimensions[member.cube].attributes.data;
+        var expectedLevels = ['Year', 'HalfYear', 'Quarter', 'Month', 'Week', 'Day'];
+        var levelPriorities = {
+            '(All)': 0,
+            Year: 9,
+            HalfYear: 8,
+            Quarter: 7,
+            Month: 6,
+            Week: 5,
+            Day: 4,
+            Hour: 3,
+            Minute: 2,
+            Second: 1
+        };
+        var result = false;
+        dimensions.forEach(function (dimension, index, array) {
+            if (dimension.name === member.dimension) {
+                dimension.hierarchies.forEach(function (hierarchy, index, array) {
+                    if (hierarchy.uniqueName === decodeURIComponent(member.hierarchy)) {
+                        hierarchy.levels.forEach(function (level, index, array) {
+                            if (expectedLevels.indexOf(level.name) !== -1) {
+                                level.priority = levelPriorities[level.name];
+                                levels.push(level);
+                            }
+                        });
+                    }
+                });
+            }
+        });
+        return levels;
+    },
+
+    //TEMPORARY DATE RANGE IMPLEMENTATION
+    //TODO: find a better place for this functional
+    isDateDimension: function (member) {
+        return this.load_dimension_levels(member).length > 0;
+    },
+
+    proceedDateRangeSet: function (axis, levels) {
+        console.log(axis, levels, 'proceed');
     }
 });

@@ -289,5 +289,149 @@ var SelectionsModal = Modal.extend({
         this.available_members = null;
         $(this.el).dialog('destroy').remove();
         this.query.run();
+    },
+
+    disassembleDate: function (date) {
+        var result = new Object();
+        if ((typeof date['constructor'] !== 'undefined') && (typeof date['constructor']['name'] !== 'undefined') && date.constructor.name === 'Date') {
+            result.Year = date.getFullYear();
+            result.HalfYear = Math.ceil((date.getMonth() + 1) / 6)
+            result.Quarter = Math.ceil((date.getMonth() + 1) / 3);
+            result.Month = date.getMonth() + 1;
+            result.Day = date.getDate();
+            result.Hour = date.getHours();
+            result.Minute = date.getMinutes();
+            result.Second = date.getSeconds();
+        }
+        return result;
+    },
+
+    applyDateRangeFilter: function (event) {
+        event.preventDefault();
+        var action = $(event.target).attr('id');
+        if (action.indexOf('apply_date_range_filter') !== -1) {
+            var fromDate = $(this.el).find('#date_range_selection_div > #from_date_field').val();
+            fromDate = new Date(fromDate);
+            fromDate = this.disassembleDate(fromDate);
+            var toDate = $(this.el).find('#date_range_selection_div > #to_date_field').val();
+            toDate = new Date(toDate);
+            toDate = this.disassembleDate(toDate);
+            console.log('apply filter', fromDate, toDate, fromDate < toDate);
+
+            debugger;
+            var thisTrick = this;
+            var levels = this.workspace.load_dimension_levels(this.member);
+
+            //sort levels
+
+            //get current axis name
+            var axisName = this.axis;
+            var member = this.member;
+            var workspace = this.workspace;
+            var disassembleDate = this.disassembleDate;
+
+            //load query json to parse
+            $.ajax({url: Settings.REST_URL + this.query.url(),
+                data: {},
+                success: function (query) {
+                    console.log({a: this, b: query, c: axisName, d: member});
+                    var axis = query.saikuAxes.filter(function (axis) {
+                        return axis.name === axisName;
+                    })[0];
+                    var dimensionOfInterest = axis.dimensionSelections.filter(function (dimension) {
+                        return dimension.name === member.dimension;
+                    })[0];
+                    console.log('dimension', dimensionOfInterest);
+                    console.log('dimension selections', dimensionOfInterest.selections);
+                    thisTrick.performFilterAction({
+                        dimension: dimensionOfInterest,
+                        member: member,
+                        fromDate: fromDate,
+                        toDate: toDate,
+                        workspace: workspace,
+                        axisName: axisName,
+                        stepsExecuted: new Array()
+                    }, 0);
+                }});
+
+            this.finished();
+        }
+    },
+
+    performFilterAction: function (parameters, levelN) {
+        if (typeof levelN === 'undefined' || typeof parameters === 'undefined') {
+            return;
+        }
+        if (parameters.dimension.selections.length <= levelN) {
+            this.finished();
+            return;
+        }
+        var level = parameters.dimension.selections[levelN];
+        if (parameters.stepsExecuted.indexOf(level.levelUniqueName) != -1) {
+            this.performFilterAction(parameters, levelN + 1);
+        } else {
+            parameters.stepsExecuted.push(level.levelUniqueName);
+        }
+        var member = parameters.member;
+        var fromDate = parameters.fromDate;
+        var toDate = parameters.toDate;
+        var workspace = parameters.workspace;
+        var axisName = parameters.axisName;
+        var thisTrick = this;
+
+        var computedLevelName = level.levelUniqueName.substring(level.levelUniqueName.lastIndexOf('[')+1, level.levelUniqueName.lastIndexOf(']'));
+
+        console.log('level', level);
+        var path = "/result/metadata/dimensions/" + encodeURIComponent(level.dimensionUniqueName) + "/hierarchies/" + encodeURIComponent(level.hierarchyUniqueName) + "/levels/" + encodeURIComponent(level.levelUniqueName);
+        workspace.query.action.get(path, { success: function (model, response) {
+            var matchingItems = new Array();
+            console.log('level items', response);
+            response.forEach(function (item) {
+                if (item.name >= fromDate[computedLevelName] && item.name <= toDate[computedLevelName]) {
+                    this.push(item);
+                }
+            }, matchingItems);
+
+            //save selections
+            var updates = [
+                {
+                    hierarchy: decodeURIComponent(level.hierarchyUniqueName),
+                    uniquename: decodeURIComponent(level.levelUniqueName),
+                    type: 'level',
+                    action: 'delete'
+                }
+            ];
+
+            // If no selections are used, add level
+            if (matchingItems.length === 0) {
+                updates.push({
+                    hierarchy: decodeURIComponent(level.hierarchyUniqueName),
+                    uniquename: decodeURIComponent(level.levelUniqueName),
+                    type: 'level',
+                    action: 'add'
+                });
+            } else {
+                // Loop through selections
+                matchingItems.forEach(
+                    function (selection) {
+                        updates.push({
+                            uniquename: decodeURIComponent(selection.uniqueName),
+                            type: 'member',
+                            action: 'add'
+                        });
+                    });
+            }
+
+            // Notify server
+            workspace.query.action.put('/axis/' + axisName + '/dimension/' + encodeURIComponent(level.dimensionUniqueName), {
+                success: function () {
+                    thisTrick.performFilterAction(parameters, levelN + 1);
+                },
+                data: {
+                    selections: JSON.stringify(updates)
+                }
+            });
+            console.log('matching items', level.name, matchingItems);
+        }, data: {result: levelN!=0}});
     }
 });
