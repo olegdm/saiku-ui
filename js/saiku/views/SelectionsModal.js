@@ -104,6 +104,8 @@ var SelectionsModal = Modal.extend({
             
             $(this.el).find('#use_result').attr('checked', this.use_result_option);
 
+	    $(this.el).find('#date_range_selection_div').css('visibility', this.workspace.isDateDimension(this.member) ? 'visible' : 'hidden');
+
             this.selected_members = [];
 
             var this_dim_sel = response;
