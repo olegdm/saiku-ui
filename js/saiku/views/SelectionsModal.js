@@ -298,7 +298,7 @@ var SelectionsModal = Modal.extend({
         if ((typeof date['constructor'] !== 'undefined') && (typeof date['constructor']['name'] !== 'undefined') && date.constructor.name === 'Date') {
             result.Year = date.getFullYear();
             result.HalfYear = Math.ceil((date.getMonth() + 1) / 6)
-            result.Quarter = Math.ceil((date.getMonth() + 1) / 3);
+            result.Quarter = 'Q'+Math.ceil((date.getMonth() + 1) / 3);
             result.Month = date.getMonth() + 1;
             result.Day = date.getDate();
             result.Hour = date.getHours();
@@ -320,9 +320,8 @@ var SelectionsModal = Modal.extend({
             toDate = this.disassembleDate(toDate);
             console.log('apply filter', fromDate, toDate, fromDate < toDate);
 
-            debugger;
             var thisTrick = this;
-            var levels = this.workspace.load_dimension_levels(this.member);
+            var dimensionLevels = this.workspace.load_dimension_levels(this.member);
 
             //sort levels
 
@@ -345,64 +344,98 @@ var SelectionsModal = Modal.extend({
                     })[0];
                     console.log('dimension', dimensionOfInterest);
                     console.log('dimension selections', dimensionOfInterest.selections);
+
+                    var levels = thisTrick.workspace.get_levels_from_query_dimension(dimensionOfInterest);
                     thisTrick.performFilterAction({
-                        dimension: dimensionOfInterest,
-                        member: member,
+                        dimensionLevels: dimensionLevels,
+                        levels: levels,
                         fromDate: fromDate,
                         toDate: toDate,
                         workspace: workspace,
-                        axisName: axisName,
-                        stepsExecuted: new Array()
+                        axisName: axisName
                     }, 0);
                 }});
-
-            this.finished();
         }
+    },
+
+    splitUniqueName: function(name) {
+        return name.replace(new RegExp('\\\[|\\\]','g'), '').split('\.');
+    },
+
+    normalizeUniqueName: function (name, dimensionLevels) {
+        var splittedName = this.splitUniqueName(name);
+        for (var i = 1; i < splittedName.length; i++) {
+            var level = dimensionLevels[i - 1];
+            var levelNames = ['Month', 'Day', 'Hour', 'Minute', 'Second'];
+            if (levelNames.indexOf(level.name) !== -1) {
+                splittedName[i] = ('00000' + splittedName[i]).slice(-2);
+            }
+        }
+        return '['+splittedName.join('].[')+']';
+    },
+
+    createUniqueName: function (date, prefix, nLevels, dimensionLevels) {
+        var splittedName = [prefix];
+        for (var i = 0; i<nLevels; i++) {
+            var level = dimensionLevels[i];
+            splittedName.push(date[level.name]);
+        }
+        var uniqueName = '['+splittedName.join('].[')+']';
+        return this.normalizeUniqueName(uniqueName, dimensionLevels);
+    },
+
+    memberMatch: function (member, levelName, fromDate, toDate, dimensionLevels) {
+        var splittedName = this.splitUniqueName(member.uniqueName);
+
+        var uniqueName = this.normalizeUniqueName(member.uniqueName, dimensionLevels);
+        var uniqueFrom = this.createUniqueName(fromDate, splittedName[0], splittedName.length - 1, dimensionLevels);
+        var uniqueTo = this.createUniqueName(toDate, splittedName[0], splittedName.length - 1, dimensionLevels);
+
+        return uniqueName >= uniqueFrom && uniqueName <= uniqueTo;
     },
 
     performFilterAction: function (parameters, levelN) {
         if (typeof levelN === 'undefined' || typeof parameters === 'undefined') {
             return;
         }
-        if (parameters.dimension.selections.length <= levelN) {
+        if (parameters.levels.length <= levelN) {
             this.finished();
             return;
         }
-        var level = parameters.dimension.selections[levelN];
-        if (parameters.stepsExecuted.indexOf(level.levelUniqueName) != -1) {
-            this.performFilterAction(parameters, levelN + 1);
-        } else {
-            parameters.stepsExecuted.push(level.levelUniqueName);
-        }
-        var member = parameters.member;
+        var level = parameters.levels[levelN];
         var fromDate = parameters.fromDate;
         var toDate = parameters.toDate;
-        var workspace = parameters.workspace;
         var axisName = parameters.axisName;
+        var workspace = parameters.workspace;
+        var dimensionLevels = parameters.dimensionLevels;
         var thisTrick = this;
 
         var computedLevelName = level.levelUniqueName.substring(level.levelUniqueName.lastIndexOf('[')+1, level.levelUniqueName.lastIndexOf(']'));
 
-        console.log('level', level);
         var path = "/result/metadata/dimensions/" + encodeURIComponent(level.dimensionUniqueName) + "/hierarchies/" + encodeURIComponent(level.hierarchyUniqueName) + "/levels/" + encodeURIComponent(level.levelUniqueName);
+
         workspace.query.action.get(path, { success: function (model, response) {
             var matchingItems = new Array();
             console.log('level items', response);
             response.forEach(function (item) {
-                if (item.name >= fromDate[computedLevelName] && item.name <= toDate[computedLevelName]) {
-                    this.push(item);
+                if (thisTrick.memberMatch(item, computedLevelName, fromDate, toDate, dimensionLevels)) {
+                    matchingItems.push(item);
                 }
-            }, matchingItems);
+            });
 
             //save selections
-            var updates = [
-                {
-                    hierarchy: decodeURIComponent(level.hierarchyUniqueName),
-                    uniquename: decodeURIComponent(level.levelUniqueName),
-                    type: 'level',
-                    action: 'delete'
-                }
-            ];
+            var updates = [];
+//            if (parameters.levels.length > 0 && levelN == 0) {
+//                parameters.levels.forEach(function (lvl) {
+                    updates.push(
+                        {
+                            hierarchy: decodeURIComponent(level.hierarchyUniqueName),
+                            uniquename: decodeURIComponent(level.levelUniqueName),
+                            type: 'level',
+                            action: 'delete'
+                        });
+//                });
+//            }
 
             // If no selections are used, add level
             if (matchingItems.length === 0) {
@@ -427,6 +460,7 @@ var SelectionsModal = Modal.extend({
             // Notify server
             workspace.query.action.put('/axis/' + axisName + '/dimension/' + encodeURIComponent(level.dimensionUniqueName), {
                 success: function () {
+                    thisTrick.query.run();
                     thisTrick.performFilterAction(parameters, levelN + 1);
                 },
                 data: {
@@ -434,6 +468,6 @@ var SelectionsModal = Modal.extend({
                 }
             });
             console.log('matching items', level.name, matchingItems);
-        }, data: {result: levelN!=0}});
+        }, data: {result: false /*levelN!=0*/}});
     }
 });

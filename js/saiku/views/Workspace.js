@@ -628,37 +628,41 @@ var Workspace = Backbone.View.extend({
         this.processing.html(safe_tags_replace(args.data.error)).show();
     },
 
+    levelPriorities: {
+        '(All)': 0,
+        Year: 9,
+        HalfYear: 8,
+        Quarter: 7,
+        Month: 6,
+        Week: 5,
+        Day: 4,
+        Hour: 3,
+        Minute: 2,
+        Second: 1
+    },
+
     load_dimension_levels: function(member) {
         var levels = new Array();
-
+        var levelPriorities = this.levelPriorities;
         var dimensions = Saiku.session.sessionworkspace.dimensions[member.cube].attributes.data;
         var expectedLevels = ['Year', 'HalfYear', 'Quarter', 'Month', 'Week', 'Day'];
-        var levelPriorities = {
-            '(All)': 0,
-            Year: 9,
-            HalfYear: 8,
-            Quarter: 7,
-            Month: 6,
-            Week: 5,
-            Day: 4,
-            Hour: 3,
-            Minute: 2,
-            Second: 1
-        };
-        var result = false;
         dimensions.forEach(function (dimension, index, array) {
             if (dimension.name === member.dimension) {
                 dimension.hierarchies.forEach(function (hierarchy, index, array) {
                     if (hierarchy.uniqueName === decodeURIComponent(member.hierarchy)) {
                         hierarchy.levels.forEach(function (level, index, array) {
-                            if (expectedLevels.indexOf(level.name) !== -1) {
-                                level.priority = levelPriorities[level.name];
+                            var computedLevelName = level.uniqueName.substring(level.uniqueName.lastIndexOf('[') + 1, level.uniqueName.lastIndexOf(']'));
+                            if (expectedLevels.indexOf(computedLevelName) !== -1) {
+                                level.priority = levelPriorities[computedLevelName];
                                 levels.push(level);
                             }
                         });
                     }
                 });
             }
+        });
+        levels.sort(function (a, b) {
+            return b.priority - a.priority;
         });
         return levels;
     },
@@ -667,6 +671,29 @@ var Workspace = Backbone.View.extend({
     //TODO: find a better place for this functional
     isDateDimension: function (member) {
         return this.load_dimension_levels(member).length > 0;
+    },
+
+    get_levels_from_query_dimension: function(dimension) {
+        var levelPriorities = this.levelPriorities;
+        var levels = new Array();
+        var uniqueLevelNames = new Array();
+        dimension.selections.forEach(function(selection) {
+            if (uniqueLevelNames.indexOf(selection.levelUniqueName) == -1) {
+                var computedLevelName = selection.levelUniqueName.substring(selection.levelUniqueName.lastIndexOf('[') + 1, selection.levelUniqueName.lastIndexOf(']'));
+                var level = {
+                    dimensionUniqueName: selection.dimensionUniqueName,
+                    hierarchyUniqueName: selection.hierarchyUniqueName,
+                    levelUniqueName: selection.levelUniqueName,
+                    priority: levelPriorities[computedLevelName]
+                };
+                levels.push(level);
+                uniqueLevelNames.push(selection.levelUniqueName);
+            };
+        });
+        levels.sort(function (a, b) {
+            return b.priority - a.priority;
+        });
+        return levels;
     },
 
     proceedDateRangeSet: function (axis, levels) {
